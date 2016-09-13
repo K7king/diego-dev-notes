@@ -289,8 +289,9 @@ take for us to recover?  How does the routing table handle this?
 ## GCE Information
 
 ### Instance Sizing
+
 | Deployment | Job | Scalability H/V | Number of Instance |Resource Pool | 5000 Test Instance Size  |
-| -- | -- | -- | -- | -- | -- |
+| ---------- | --- | --------------- | ------------------ | ------------ | ------------------------ |
 |CF| api | H |2 |large | n1-standard-2|
 |CF| api_worker | H | 2 | small | n1-standard-2|
 |CF| blobstore | V | 1 | medium | n1-standard-2
