@@ -321,6 +321,6 @@ take for us to recover?  How does the routing table handle this?
 ### Performance Tuning Comments
 
 
-1. Change the HA Proxy to store logs on /var/vcap/sys/log instead of /var/log - Set ha_proxy.log_to_file to be true
-1. Validate size of Influxdb VM during larger runs seems CPU bound
-1. Validate size of Perf VM during larger runs as Disk can fill due to logs and results
+1. Set the `ha_proxy.log_to_file` property to true in the manifest. This makes the HA Proxy store logs on `/var/vcap/sys/log` instead of `/var/log`.
+1. Validate size of Influxdb VM during larger runs--it seems CPU-bound.
+1. Validate size of Perf VM during larger runs as disk can fill due to logs and results.
