@@ -97,6 +97,7 @@ All things LRP. Here's an outline:
 
 ### ActualLRPs
 
+Components modify ActualLRPs via calls to the BBS API; only the BBS may modify ActualLRLPs directly.
 Diego attempts to keep one ActualLRP running per desired index.
 To ensure this we use the BBS to walk an individual ActualLRP through a state machine.
 
@@ -115,7 +116,7 @@ State | Meaning
 ------|--------
 `UNCLAIMED`| The ActualLRP is being scheduled by an auction
 `CLAIMED` | The ActualLRP has been assigned to a Cell and is being started
-`RUNNING` | The ActualLRP is runing on a Cell and is ready to receive traffic/work.
+`RUNNING` | The ActualLRP is running on a Cell and is ready to receive traffic/work.
 `CRASHED` | The ActualLRP has crashed and is no longer on a Cell. It should be restarted (eventually).
 
 In addition, the ActualLRP includes two pieces of data: `CrashCount` (keeping track of the number of crashes) and `Since` (keeping track of the time when `State` was last updated).
@@ -297,7 +298,7 @@ Messages get lost.  Connections time out.  Components fail.  Bugs happen.
 Here are it's responsibilities and the actions it takes:
 
 1. *Reaping ActualLRPs on failed Cells:*
-	- Cells periodically maintain their presence in the BBS.  If a Cell disappears the BBS will notice and CAS `CLAIMED` and `RUNNING` ActualLRPs associated with the missing Cell to `UNCLAIMED`.  The BBS will also emit starts for these missing ActualLRPs.
+	- Cells periodically maintain their presence in the BBS.  If a Cell disappears the BBS will notice and update `CLAIMED` and `RUNNING` ActualLRPs associated with the missing Cell to `UNCLAIMED`.  The BBS will also emit starts for these missing ActualLRPs.
 	- In addition to polling periodically, the BBS actively watches for Cells disappearing.  When a Cell goes away, convergence is triggered immediately.  This was covered in #11.
 2. *Starting missing ActualLRPs:*
 	- If there is no ActualLRP in the BBS for a particular DesiredLRP index, it creates an `UNCLAIMED` ActualLRP and requests a start.
@@ -320,26 +321,26 @@ In the following table we describe the actions the Rep must take to bring the BB
 Container State | ActualLRP State | Action | Reason
 ----------------|-----------------|--------|-------
 `RESERVED` | No ActualLRP | Delete Container | **Conceivable**: This ActualLRP is no longer desired (maybe because the DesiredLRP was scaled down or deleted)
-`RESERVED` | `UNCLAIMED` | CAS to `CLAIMED α` **THEN** Run Container | **Expected**: α has a reservation for this LRP and should claim it and then run it in the container.
+`RESERVED` | `UNCLAIMED` | Update to `CLAIMED α` **THEN** Run Container | **Expected**: α has a reservation for this LRP and should claim it and then run it in the container.
 `RESERVED` | `CLAIMED α` | Run Container | **Conceivable**: We already claimed it and should make sure we've started running the container
 `RESERVED` | `CLAIMED ω` | Delete Container | **Conceivable**: Don't run this container, since a different rep got farther than us
-`RESERVED` | `RUNNING α` | CAS to `CLAIMED α` **THEN** Run Container | **Inconceivable**: We shouldn't have been able to get to this state, but if we have correct the BBS and run anyway
+`RESERVED` | `RUNNING α` | Update to `CLAIMED α` **THEN** Run Container | **Inconceivable**: We shouldn't have been able to get to this state, but if we have correct the BBS and run anyway
 `RESERVED` | `RUNNING ω` | Delete Container | **Conceivable**: Don't run this container, since a different rep got farther than us
 `RESERVED` | `CRASHED` | Delete Container | **Conceivable**: Don't run this container
 `INITIALIZING/CREATED` | No ActualLRP | Delete Container | **Conceivable**: This ActualLRP is no longer desired (maybe because the DesiredLRP was scaled down or deleted)
-`INITIALIZING/CREATED` | `UNCLAIMED` | CAS to `CLAIMED α` | **Inconceivable**: We should have claimed the LRP before running it, but correct the BBS if this happens
+`INITIALIZING/CREATED` | `UNCLAIMED` | Update to `CLAIMED α` | **Inconceivable**: We should have claimed the LRP before running it, but correct the BBS if this happens
 `INITIALIZING/CREATED` | `CLAIMED α` | Do Nothing | **Expected**: The Cell is starting this ActualLRP, no need to write to the BBS
 `INITIALIZING/CREATED` | `CLAIMED ω` | Delete Container | **Conceivable**: The ActualLRP is starting as ω (probably on some other Cell), stop starting it on this Cell.
-`INITIALIZING/CREATED` | `RUNNING α` | CAS to `CLAIMED α` | **Inconceivable**: This should not be possible, but the BBS should be made to reflect the truth
+`INITIALIZING/CREATED` | `RUNNING α` | Update to `CLAIMED α` | **Inconceivable**: This should not be possible, but the BBS should be made to reflect the truth
 `INITIALIZING/CREATED` | `RUNNING ω` | Delete Container | **Conceivable**: The ActualLRP is running elsewhere, stop starting it on this Cell
 `INITIALIZING/CREATED` | `CRASHED` | Delete Container | **Conceivable**: This Cell is incorrectly starting the instance - some other Cell will pick this up later.
 `RUNNING` | No ActualLRP | CREATE `RUNNING α` | **Conceivable**: This Cell is running the ActualLRP, let Diego know so it can take action appropriately (we don't allow blank ActualLRPs to shut down containers as this would lead to catastrophic fail should the BBS be accidentally purged).
-`RUNNING` | `UNCLAIMED` | CAS to `RUNNING α` | **Conceivable**: This Cell is running the ActualLRP, no need to start it elsewhere
-`RUNNING` | `CLAIMED α` | CAS to `RUNNING α` & CAD `/e` | **Expected**: This Cell is running the ActualLRP. Delete the evacuating instance if any
-`RUNNING` | `CLAIMED ω` | CAS to `RUNNING α` | **Conceivable**: This Cell is running the ActualLRP, no need to start it elsewhere
+`RUNNING` | `UNCLAIMED` | Update to `RUNNING α` | **Conceivable**: This Cell is running the ActualLRP, no need to start it elsewhere
+`RUNNING` | `CLAIMED α` | Update to `RUNNING α` & Delete `/e` | **Expected**: This Cell is running the ActualLRP. Delete the evacuating instance if any
+`RUNNING` | `CLAIMED ω` | Update to `RUNNING α` | **Conceivable**: This Cell is running the ActualLRP, no need to start it elsewhere
 `RUNNING` | `RUNNING α` | Do Nothing | **Expected**: This Cell is running the ActualLRP, no need to write to the BBS
 `RUNNING` | `RUNNING ω` | Delete Container | **Conceivable**: The ActualLRP is running elsewhere, stop running it on this Cell
-`RUNNING` | `CRASHED` | CAS to `RUNNING α` | **Conceivable**: This Cell is running the ActualLRP. It's not crashed and need not be restarted.
+`RUNNING` | `CRASHED` | Update to `RUNNING α` | **Conceivable**: This Cell is running the ActualLRP. It's not crashed and need not be restarted.
 `COMPLETED (crashed)` | No ActualLRP | Perform `RepCrashDance` then Delete Container | This Cell just saw a crash but the BBS is empty.  Perhaps BBS was accidentally purged?  In that case: update it with what we know to be true.
 `COMPLETED (crashed)` | `UNCLAIMED` | Delete Container | Instance will be scheduled elsewhere
 `COMPLETED (crashed)` | `CLAIMED α` | Perform `RepCrashDance` then Delete Container | Instance crashed on this Cell while starting
@@ -349,13 +350,13 @@ Container State | ActualLRP State | Action | Reason
 `COMPLETED (crashed)` | `CRASHED` | Delete Container | The crash has already been noted
 `COMPLETED (shutdown)` | No ActualLRP | Delete Container | **Conceivable**: Nothing to be done, this Cell was asked to shut the ActualLRP down.
 `COMPLETED (shutdown)` | `UNCLAIMED` | Delete Container | **Conceivable**: Nothing to be done
-`COMPLETED (shutdown)` | `CLAIMED α` | CAD ActualLRP then Delete Container | **Conceivable**: This Cell was told to stop and should now clean up the BBS
+`COMPLETED (shutdown)` | `CLAIMED α` | Delete ActualLRP then Delete Container | **Conceivable**: This Cell was told to stop and should now clean up the BBS
 `COMPLETED (shutdown)` | `CLAIMED ω` | Delete Container | **Conceivable**: The Instance is starting elsewhere, leave it be
-`COMPLETED (shutdown)` | `RUNNING α` | CAD ActualLRP then Delete Container | **Expected**: This Cell was told to stop and should now clean up the BBS
+`COMPLETED (shutdown)` | `RUNNING α` | Delete ActualLRP then Delete Container | **Expected**: This Cell was told to stop and should now clean up the BBS
 `COMPLETED (shutdown)` | `RUNNING ω` | Delete Container | **Conceivable**: Instance is running elsewhere, leave it be
 `COMPLETED (shutdown)` | `CRASHED` | Delete Container | **Conceivable**: Nothing to do
-No Container | `CLAIMED α` | CAD ActualLRP | **Conceivable**: There is no matching container, delete the ActualLRP and allow the BBS to determine whether it is still desired
-No Container | `RUNNING α` | CAD ActualLRP | **Conceivable**: There is no matching container, delete the ActualLRP and allow the BBS to determine whether it is still desired
+No Container | `CLAIMED α` | Delete ActualLRP | **Conceivable**: There is no matching container, delete the ActualLRP and allow the BBS to determine whether it is still desired
+No Container | `RUNNING α` | Delete ActualLRP | **Conceivable**: There is no matching container, delete the ActualLRP and allow the BBS to determine whether it is still desired
 
 Some notes:
 
@@ -369,17 +370,15 @@ Alternate view of table above:
 BBS | Reserved | I/C | Running | Shutdown | Crashed | No Container
 ---|---|---|---|---|---|---
 Missing | Do nothing | Delete Container | Create Running | Delete Container | RCD + Delete Container |
-Unclaimed | Do Nothing | CAS Claimed | CAS Running | Delete Container | Delete Container |
-Claimed-α | Do Nothing | Do nothing | CAS Running | CAD + Delete Container | RCD + Delete Container | CAD
-Claimed-ω | Do Nothing | Delete Container | CAS Running | Delete Container | Delete Container |
-Running-α | Do Nothing | CAS Claimed | Do Nothing | CAD + Delete Container | RCD + Delete Container | CAD
+Unclaimed | Do Nothing | Update Claimed | Update Running | Delete Container | Delete Container |
+Claimed-α | Do Nothing | Do nothing | Update Running | Delete ActualLRP + Delete Container | RCD + Delete Container | Delete ActualLRP
+Claimed-ω | Do Nothing | Delete Container | Update Running | Delete Container | Delete Container |
+Running-α | Do Nothing | Update Claimed | Do Nothing | Delete ActualLRP + Delete Container | RCD + Delete Container | Delete ActualLRP
 Running-ω | Do Nothing | Delete Container | Delete Container | Delete Container | Delete Container |
-Crashed | Do Nothing | Delete Container | CAS Running | Delete Container | Delete Container |
+Crashed | Do Nothing | Delete Container | Update Running | Delete Container | Delete Container |
 
 ```
 I/C = Initializing/Created
-CAS = Compare and Swap
-CAD = Compare and Delete
 RCD = RepCrashDance
 ```
 
@@ -403,32 +402,32 @@ Instance key state | Evacuating key state | Action | Reason
 `UNCLAIMED` | `RUNNING-α` | Do Nothing | **Expected**: Waiting for other rep to win auction
 `UNCLAIMED+ε` | `RUNNING-α` | Do Nothing | **Conceivable**: No one won the auction, so the evacuating container stays put while the auctioneer has another go.
 `UNCLAIMED` | `RUNNING-β` | Delete container | **Conceivable**: β ran our evacuated instance, then evacuated itself
-`CLAIMED-α` | - | CREATE /e: `RUNNING α`, CAS /i: `UNCLAIMED` | **Conceivable**: α has a RUNNING container but didn't get to update the BBS to `RUNNING` yet
-`CLAIMED-α` | `RUNNING-α` | CAS /i: `UNCLAIMED` | **Conceivable**: α failed to update the BBS to UNCLAIMED while evacuating
-`CLAIMED-α` | `RUNNING-β` | CAS /e: `RUNNING α`, CAS /i: `UNCLAIMED` | **Conceivable**: β evacuated the container, α CLAIMED it, ran it and began evacuating but hasn't yet updated the BBS to `RUNNING`
+`CLAIMED-α` | - | CREATE /e: `RUNNING α`, Update /i: `UNCLAIMED` | **Conceivable**: α has a RUNNING container but didn't get to update the BBS to `RUNNING` yet
+`CLAIMED-α` | `RUNNING-α` | Update /i: `UNCLAIMED` | **Conceivable**: α failed to update the BBS to UNCLAIMED while evacuating
+`CLAIMED-α` | `RUNNING-β` | Update /e: `RUNNING α`, Update /i: `UNCLAIMED` | **Conceivable**: β evacuated the container, α CLAIMED it, ran it and began evacuating but hasn't yet updated the BBS to `RUNNING`
 `CLAIMED-ω` | - | CREATE /e: `RUNNING α` | **Inconceivable?**: Ensure routing to our running instance
 `CLAIMED-ω` | `RUNNING-α` | Do Nothing | **Expected**: Waiting for ω to start running instance
 `CLAIMED-ω` | `RUNNING-β` | Delete container | **Conceivable**: β ran our evacuated instance, then evacuated itself
-`RUNNING-α` | - | CREATE /e: `RUNNING α`, CAS /i: `UNCLAIMED` | **Expected**: This is the initial action during evacuation
-`RUNNING-α` | `RUNNING-α` | CAS /i: `UNCLAIMED` | **Conceivable**: α failed to update the BBS to UNCLAIMED while evacuating
-`RUNNING-α` | `RUNNING-β` | CAS /e: `RUNNING α`, CAS /i: `UNCLAIMED` | **Conceivable**: β evacuated the container, α CLAIMED it, ran it, and then began evacuating
+`RUNNING-α` | - | CREATE /e: `RUNNING α`, Update /i: `UNCLAIMED` | **Expected**: This is the initial action during evacuation
+`RUNNING-α` | `RUNNING-α` | Update /i: `UNCLAIMED` | **Conceivable**: α failed to update the BBS to UNCLAIMED while evacuating
+`RUNNING-α` | `RUNNING-β` | Update /e: `RUNNING α`, Update /i: `UNCLAIMED` | **Conceivable**: β evacuated the container, α CLAIMED it, ran it, and then began evacuating
 `RUNNING-ω` | - | Delete container | **Conceivable**: The actualLRP is now running elsewhere but the /e was removed when the instance transitioned to running state
-`RUNNING-ω` | `RUNNING-α` | CAD /e && Delete container | **Expected**: Cleanup after successful evacuation
+`RUNNING-ω` | `RUNNING-α` | Delete /e && Delete container | **Expected**: Cleanup after successful evacuation
 `RUNNING-ω` | `RUNNING-β` | Delete container | **Conceivable**: β evacuated the container, ω CLAIMED it, ran it, and then began evacuating, and then α noticed
 `CRASHED` | - | Delete container | **Conceivable**: The actualLRP is now running elsewhere but the /e was somehow lost
-`CRASHED` | `RUNNING-α` | CAD /e && Delete container | **Expected**: Cleanup after successful evacuation (but then the new instance crashed)
+`CRASHED` | `RUNNING-α` | Delete /e && Delete container | **Expected**: Cleanup after successful evacuation (but then the new instance crashed)
 `CRASHED` | `RUNNING-β` | Delete container | **Conceivable**: β evacuated the container, some rep CLAIMED it, ran it, `CRASHED` it, and then α noticed
 - | - | Delete container | **Conceivable**: The actualLRP is now running elsewhere but the /e was somehow lost
-- | `RUNNING-α` | CAD /e && Delete container | **Expected**: Cleanup after scaling down during evacuation
+- | `RUNNING-α` | Delete /e && Delete container | **Expected**: Cleanup after scaling down during evacuation
 - | `RUNNING-β` | Delete container | **Conceivable**: β evacuated the container, the actualLRP was scaled down, and then α noticed
 
 ##### When the container is not Running
 
 When the /instance ActualLRP changes to the `UNCLAIMED` state, the BBS will also request a new auction for it.
 
-- In container states that are not `RUNNING` or `COMPLETED`, the rep destroys the container, CADs the /evacuating ActualLRP if is `RUNNING-α`, and request a new auction for the ActualLRP by CASing /instance to `UNCLAIMED`
-- In a `COMPLETED (SHUTDOWN)` container state, the rep destroys the container and CADs the /evacuating ActualLRP if is `RUNNING-α`, and CADs the /instance ActualLRP as usual.
-- In a `COMPLETED (CRASHED)` container state, the rep destroys the container and CADs the /evacuating ActualLRP if is `RUNNING-α`, and performs the RepCrashDance on the /instance ActualLRP as usual.
+- In container states that are not `RUNNING` or `COMPLETED`, the rep destroys the container, deletes the /evacuating ActualLRP if is `RUNNING-α`, and request a new auction for the ActualLRP by updating /instance to `UNCLAIMED`
+- In a `COMPLETED (SHUTDOWN)` container state, the rep destroys the container and deletes the /evacuating ActualLRP if is `RUNNING-α`, and deletes the /instance ActualLRP as usual.
+- In a `COMPLETED (CRASHED)` container state, the rep destroys the container and deletes the /evacuating ActualLRP if is `RUNNING-α`, and performs the RepCrashDance on the /instance ActualLRP as usual.
 
 - the Rep shuts down when either all containers have been destroyed OR an evacuation timeout is exceeded:
 	+ in either case, the Rep ensures that any ActualLRPs associated with it are removed from `/evacuating` and that any tasks it still has running transition to `COMPLETED`.
@@ -479,12 +478,12 @@ Here's a happy path overview of the Task lifecycle:
 	+ Sends a start request to the Auctioneer *(if this fails: the BBS does nothing; it will eventually resend the message during convergence)*.
 - The Auctioneer picks a Cell to run the Task *(if this fails: the auctioneer marks the Task completed and failed)*.
 - The Rep creates a container reservation (and then ACKs the Auctioneer's request) *(if this fails: the Rep tells the Auctioneer that the Task could not be started and the auctioneer adds the Task to the next batch)*.
-- In its processing loop, the Rep CAS the Task from `PENDING` to `RUNNING` *(if this fails: the Rep deletes the reservation -- the BBS will eventually see the `PENDING` task and ask the auctioneer to try again)*.
+- In its processing loop, the Rep update the Task from `PENDING` to `RUNNING` *(if this fails: the Rep deletes the reservation -- the BBS will eventually see the `PENDING` task and ask the auctioneer to try again)*.
 - Upon success the Rep starts the container running *(if this fails: the Rep marks the Task `COMPLETED` and failed)*.
-- When the container completes (succesfully or otherwise) the Rep CAS the Task to `COMPLETED` *(if the CAS fails, the Rep will try again in its polling cycle)*.
+- When the container completes (succesfully or otherwise) the Rep update the Task to `COMPLETED` *(if the update fails, the Rep will try again in its polling cycle)*.
 	+ If the Task has a `CompletionCallback` URL this sends a message to the BBS to handle resolving the Task (BBS takes care of this).
-- The BBS CASes the Task to `RESOLVING` and calls the `CompletionCallback` *(if the CAS fails it does not call the `CompletionCallback`)*.
-- Upon success BBS and Rep CAD the Task *(if the CAD fails the BBS does nothing: during convergence it will eventually demote the Task to `COMPLETE` and we'll try again)*.
+- The BBS updates the Task to `RESOLVING` and calls the `CompletionCallback` *(if the update fails it does not call the `CompletionCallback`)*.
+- Upon success BBS and Rep deletes the Task *(if the delete fails the BBS does nothing: during convergence it will eventually demote the Task to `COMPLETE` and we'll try again)*.
 
 ### Distributing Tasks: Auctioneer
 
@@ -495,17 +494,17 @@ Tasks are distributed much like ActualLRPs.  In fact the batch of work performed
 
 #### Communicating Fullness
 
-When a Task cannot be allocated the Auctioneer CAS the Task from the `PENDING` state to the `COMPLETED` state, marking it as `Failed` and including a `FailureReason` that explains that the cluster has no capacity for the task.  It is up to the consumer to retry the Task.
+When a Task cannot be allocated the Auctioneer updates the Task from the `PENDING` state to the `COMPLETED` state, marking it as `Failed` and including a `FailureReason` that explains that the cluster has no capacity for the task.  It is up to the consumer to retry the Task.
 
 ### Resolving Completed Tasks
 
 When a Task is `COMPLETED` it is up-to the consumer to delete the Task (though the BBS will clean up Tasks that have been `COMPLETED` for a lengthy period of time).  Consumers can either poll Tasks to see them enter the `COMPLETED` state or can register a `CompletionCallback` to be told the Task has been completed:
 
 - When polling:
-	+ consumers instruct the BBS to delete the Task.  This CAS `COMPLETED => RESOLVING` then CAD `RESOLVING`.
+	+ consumers instruct the BBS to delete the Task.  This updates `COMPLETED => RESOLVING` then deletes `RESOLVING`.
 - When handling the `CompletionCallback`
-	+ the BBS CASes `COMPLETED => RESOLVING` to indicate that it is handling resolving the Task.  This is necessary to ensure that no two BBSes attempt to call the `CompletionCallback`.
-	+ when the `CompletionCallback` returns, the BBS CADs the Task.
+	+ the BBS updates `COMPLETED => RESOLVING` to indicate that it is handling resolving the Task.  This is necessary to ensure that no two BBSes attempt to call the `CompletionCallback`.
+	+ when the `CompletionCallback` returns, the BBS deletes the Task.
 
 It is an error to attempt to delete a Task that is *not* in the `COMPLETED` state.
 
@@ -531,7 +530,7 @@ Tasks never migrate from one Cell to another.  They effectively block Cell evacu
 - the Rep is told to evacuate.
 - the Rep subsequently refuses to take on any new work
 - the Rep shuts down when either all containers have been destroyed OR an evacuation timeout is exceeded:
-	- in either case, the Rep ensures that any `RUNNING` Tasks associated with it are CAS to the `COMPLETED` state.  These should be marked `Failed` with the `FailureReason = "timed out during cell evacuation"`
+	- in either case, the Rep ensures that any `RUNNING` Tasks associated with it are updated to the `COMPLETED` state.  These should be marked `Failed` with the `FailureReason = "timed out during cell evacuation"`
 
 ### Maintaining Consistency: Convergence
 
@@ -563,7 +562,7 @@ Container State | Task State | Action | Reason
 `RESERVED` | `RESOLVING on α` | Delete Container | **Conceivable**: Don't start running this Task
 `RESERVED` | `RESOLVING on ω` | Delete Container | **Conceivable**: Don't start running this Task
 `INITIALIZING/CREATED/RUNNING` | No Task | Delete Container | **Conceivable**: The task has been cancelled, α should stop running it.
-`INITIALIZING/CREATED/RUNNING` | `PENDING` | CAS the Task to `RUNNING on α` | **Inconceivable**: Make sure BBS knows we're running the Task (but we should already have started the task before running the container).
+`INITIALIZING/CREATED/RUNNING` | `PENDING` | Update the Task to `RUNNING on α` | **Inconceivable**: Make sure BBS knows we're running the Task (but we should already have started the task before running the container).
 `INITIALIZING/CREATED/RUNNING` | `RUNNING on α` | Do Nothing | **Expected**: BBS is up-to-date
 `INITIALIZING/CREATED/RUNNING` | `RUNNING on ω` | Delete Container (and log loudly) | **Inconceivable**: Apparently this Task is running somewhere else!
 `INITIALIZING/CREATED/RUNNING` | `COMPLETED on α` | Delete Container | **Conceivable**: The task is `COMPLETED` (perhaps it was cancelled) - delete the container
@@ -571,14 +570,14 @@ Container State | Task State | Action | Reason
 `INITIALIZING/CREATED/RUNNING` | `RESOLVING on α` | Delete Container | **Conceivable**: The task is `RESOLVING` (perhaps it was cancelled) - delete the container
 `INITIALIZING/CREATED/RUNNING` | `RESOLVING on ω` | Delete Container | **Inconceivable**: Apparently this Task ran to completion somewhere else!
 `COMPLETED` | No Task | Delete Container | **Conceivable**: The Task has been cancelled - don't worry about it
-`COMPLETED` | `PENDING` | CAS the Task to `COMPLETED` then Delete Container | **Inconceivable**: We should already have started the task before running the container.
-`COMPLETED` | `RUNNING on α` | CAS the Task to `COMPLETED` then Delete Container | **Expected**: Make sure BBS knows we've completed the Task
+`COMPLETED` | `PENDING` | Update the Task to `COMPLETED` then Delete Container | **Inconceivable**: We should already have started the task before running the container.
+`COMPLETED` | `RUNNING on α` | Update the Task to `COMPLETED` then Delete Container | **Expected**: Make sure BBS knows we've completed the Task
 `COMPLETED` | `RUNNING on ω` | Delete Container | **Inconceivable**: Apparently this Task is running somewhere else!
 `COMPLETED` | `COMPLETED on α` | Delete Container | **Conceivable**: The task has already been marked `COMPLETED` - delete the container
 `COMPLETED` | `COMPLETED on ω` | Delete Container | **Inconceivable**: Apparently this Task ran to completion somewhere else!
 `COMPLETED` | `RESOLVING on α` | Delete Container | **Conceivable**: The task has already been marked `RESOLVING` (perhaps it was cancelled) - delete the container
 `COMPLETED` | `RESOLVING on ω` | Delete Container | **Inconceivable**: Apparently this Task ran to completion somewhere else!
-No Container | `RUNNING on α` | CAS to `COMPLETED` and `Failed` | **Conceivable**: Diego thinks α is running the instance, but it is not
+No Container | `RUNNING on α` | Update to `COMPLETED` and `Failed` | **Conceivable**: Diego thinks α is running the instance, but it is not
 No Container | `COMPLETED on α` | Do Nothing | **Expected**: The client has not resolved the task
 No Container | `RESOLVING on α` | Do Nothing | **Expected**: The client is resolving the task
 
